@@ -39,6 +39,11 @@ const CONFIG = {
   WHITE_CLAMP: 232, // Adjust RGB channel cap to prevent whiteout here.
   NEUTRAL_DRIFT: 0.00016, // Adjust drift toward neutral here.
   HUE_MIX_WEIGHT: 0.58, // Adjust hue mixing toward neighbor color here.
+  BASE_POINT_SIZE: 1, // Adjust default point size here.
+  MIN_POINT_SIZE_RATIO: 0.78, // Adjust smallest inactive point size here.
+  INACTIVITY_THRESHOLD: 14000, // Adjust time before points begin shrinking here, in ms.
+  SIZE_SHRINK_RATE: 0.0018, // Adjust slow inactive shrink speed here.
+  SIZE_GROW_RATE: 0.035, // Adjust reactivation growth speed here.
   MIN_SATURATION: 0.62, // Adjust minimum saturation here.
   MAX_LIGHTNESS: 0.76, // Adjust max color brightness/value here.
   HUE_BLEND_RATE: 0.42, // Adjust circular hue blending here.
@@ -141,6 +146,9 @@ function createField() {
         seed,
         flowX: baseline.x,
         flowY: baseline.y,
+        currentSize: CONFIG.BASE_POINT_SIZE,
+        targetSize: CONFIG.BASE_POINT_SIZE,
+        inactiveTime: 0,
         intensity: CONFIG.AMBIENT_INTENSITY,
         memory: 0,
         activeMemory: 0,
@@ -188,6 +196,9 @@ function clearField() {
 
       cell.flowX = baseline.x;
       cell.flowY = baseline.y;
+      cell.currentSize = CONFIG.BASE_POINT_SIZE;
+      cell.targetSize = CONFIG.BASE_POINT_SIZE;
+      cell.inactiveTime = 0;
       cell.intensity = CONFIG.AMBIENT_INTENSITY;
       cell.memory = 0;
       cell.activeMemory = 0;
@@ -508,6 +519,8 @@ function stepField(elapsed) {
       nextConflictTintR[row][col] = mixValue(cell.conflictTintR, neighborhood.conflictTintR, 0.05);
       nextConflictTintG[row][col] = mixValue(cell.conflictTintG, neighborhood.conflictTintG, 0.05);
       nextConflictTintB[row][col] = mixValue(cell.conflictTintB, neighborhood.conflictTintB, 0.05);
+
+      updatePointSize(cell, elapsed);
     }
   }
 
@@ -702,7 +715,7 @@ function renderDirectionalStrokes() {
         (isColored ? 0.34 + cell.intensity * 0.16 : 0.08).toFixed(3)
       })`;
       ctx.beginPath();
-      ctx.arc(cell.x, cell.y, 1 + cell.intensity * 1.3, 0, Math.PI * 2);
+      ctx.arc(cell.x, cell.y, cell.currentSize + cell.intensity * 1.3, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -869,6 +882,33 @@ function getClosestCell(px, py) {
   const col = clamp(Math.round(px / cellSizeX) - 1, 0, cols - 1);
   const row = clamp(Math.round(py / cellSizeY) - 1, 0, rows - 1);
   return grid[row]?.[col] || null;
+}
+
+function updatePointSize(cell, elapsed) {
+  const sustainedActivity =
+    cell.intensity +
+    cell.activeMemory +
+    cell.colorWeight * 0.35 +
+    cell.instability * 0.6;
+  const minimumSize = CONFIG.BASE_POINT_SIZE * CONFIG.MIN_POINT_SIZE_RATIO;
+
+  if (sustainedActivity > 0.18) {
+    cell.inactiveTime = 0;
+    cell.targetSize = CONFIG.BASE_POINT_SIZE;
+  } else {
+    cell.inactiveTime += elapsed;
+
+    if (cell.inactiveTime > CONFIG.INACTIVITY_THRESHOLD) {
+      cell.targetSize = minimumSize;
+    }
+  }
+
+  const rate =
+    cell.targetSize >= cell.currentSize
+      ? CONFIG.SIZE_GROW_RATE
+      : CONFIG.SIZE_SHRINK_RATE;
+  cell.currentSize = mixValue(cell.currentSize, cell.targetSize, rate * (elapsed / 16.67));
+  cell.currentSize = clamp(cell.currentSize, minimumSize, CONFIG.BASE_POINT_SIZE);
 }
 
 function detectConflict(cell, userId, color) {
