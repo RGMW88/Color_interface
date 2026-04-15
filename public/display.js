@@ -40,7 +40,7 @@ const CONFIG = {
   NEUTRAL_DRIFT: 0.00016, // Adjust drift toward neutral here.
   HUE_MIX_WEIGHT: 0.58, // Adjust hue mixing toward neighbor color here.
   BASE_POINT_SIZE: 1, // Adjust default point size here.
-  MIN_POINT_SIZE_RATIO: 0.15, // Adjust smallest inactive point size here.
+  MIN_POINT_SIZE_RATIO: 0.25, // Adjust smallest inactive point size here.
   INACTIVITY_THRESHOLD: 10000, // Adjust time before points begin shrinking here, in ms.
   INACTIVITY_FULL_SHRINK_TIME: 25000, // Adjust when inactive points reach their smallest size here, in ms.
   SIZE_SHRINK_RATE: 0.055, // Adjust slow inactive shrink speed here.
@@ -671,11 +671,7 @@ function renderDirectionalStrokes() {
         CONFIG.MIN_POINT_SIZE_RATIO,
         1
       );
-      const visibleFootprintScale = clamp(
-        footprintScale * footprintScale,
-        CONFIG.MIN_POINT_SIZE_RATIO,
-        1
-      );
+      const visibleFootprintScale = footprintScale;
       const length =
         (CONFIG.LINE_LENGTH + cell.intensity * 8 + cell.memory * 4) *
         clamp(0.22 + visibleFootprintScale * 0.78, 0.22, 1);
