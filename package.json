@@ -1,0 +1,23 @@
+{
+  "name": "shared-relational-field",
+  "version": "1.0.0",
+  "description": "A real-time multi-user conceptual interface prototype for disturbing a shared relational field.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "art",
+    "interface",
+    "socket.io",
+    "express",
+    "canvas",
+    "realtime"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  }
+}

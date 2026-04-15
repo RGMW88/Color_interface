@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Enter the Field</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body class="controller-page">
+    <main id="controller-surface" class="controller-surface">
+      <div class="controller-grid" aria-hidden="true"></div>
+      <section class="controller-toolbar" aria-label="Color selection">
+        <span class="eyebrow">Choose Color</span>
+        <p class="controller-selection">
+          Active color:
+          <span id="selected-color-label" class="selected-color-label">Blue</span>
+        </p>
+        <div id="color-picker" class="color-picker"></div>
+      </section>
+      <div id="touch-indicator" class="touch-indicator"></div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/controller.js"></script>
+  </body>
+</html>

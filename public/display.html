@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shared Relational Field</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body class="display-page">
+    <canvas id="field-canvas" aria-label="Shared relational field"></canvas>
+
+    <div class="display-shell">
+      <div class="display-meta">
+        <button id="reset-field" class="ghost-button" type="button">Reset</button>
+      </div>
+
+      <aside class="qr-panel">
+        <p>Scan to enter the field</p>
+        <img id="qr-image" alt="QR code linking to the controller page" />
+        <a id="controller-link" href="/controller">/controller</a>
+      </aside>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/display.js"></script>
+  </body>
+</html>
