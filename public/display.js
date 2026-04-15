@@ -42,6 +42,7 @@ const CONFIG = {
   BASE_POINT_SIZE: 1, // Adjust default point size here.
   MIN_POINT_SIZE_RATIO: 0.015, // Adjust smallest inactive point size here.
   INACTIVITY_THRESHOLD: 10000, // Adjust time before points begin shrinking here, in ms.
+  INACTIVITY_FULL_SHRINK_TIME: 25000, // Adjust when inactive points reach their smallest size here, in ms.
   SIZE_SHRINK_RATE: 0.055, // Adjust slow inactive shrink speed here.
   SIZE_GROW_RATE: 0.035, // Adjust reactivation growth speed here.
   MIN_SATURATION: 0.62, // Adjust minimum saturation here.
@@ -902,25 +903,36 @@ function getClosestCell(px, py) {
 }
 
 function updatePointSize(cell, elapsed) {
-  const sustainedActivity = cell.activeMemory + cell.instability * 0.6;
   const minimumSize = CONFIG.BASE_POINT_SIZE * CONFIG.MIN_POINT_SIZE_RATIO;
+  const shrinkDuration = Math.max(
+    1,
+    CONFIG.INACTIVITY_FULL_SHRINK_TIME - CONFIG.INACTIVITY_THRESHOLD
+  );
 
-  if (sustainedActivity > 0.18) {
-    cell.inactiveTime = 0;
+  cell.inactiveTime += elapsed;
+
+  if (cell.inactiveTime <= CONFIG.INACTIVITY_THRESHOLD) {
     cell.targetSize = CONFIG.BASE_POINT_SIZE;
   } else {
-    cell.inactiveTime += elapsed;
-
-    if (cell.inactiveTime > CONFIG.INACTIVITY_THRESHOLD) {
-      cell.targetSize = minimumSize;
-    }
+    const shrinkProgress = clamp(
+      (cell.inactiveTime - CONFIG.INACTIVITY_THRESHOLD) / shrinkDuration,
+      0,
+      1
+    );
+    const easedProgress = shrinkProgress * shrinkProgress * (3 - 2 * shrinkProgress);
+    cell.targetSize = mixValue(CONFIG.BASE_POINT_SIZE, minimumSize, easedProgress);
   }
 
-  const rate =
-    cell.targetSize >= cell.currentSize
-      ? CONFIG.SIZE_GROW_RATE
-      : CONFIG.SIZE_SHRINK_RATE;
-  cell.currentSize = mixValue(cell.currentSize, cell.targetSize, rate * (elapsed / 16.67));
+  if (cell.targetSize < cell.currentSize) {
+    cell.currentSize = Math.min(cell.currentSize, cell.targetSize);
+  } else {
+    cell.currentSize = mixValue(
+      cell.currentSize,
+      cell.targetSize,
+      CONFIG.SIZE_GROW_RATE * (elapsed / 16.67)
+    );
+  }
+
   cell.currentSize = clamp(cell.currentSize, minimumSize, CONFIG.BASE_POINT_SIZE);
 }
 
