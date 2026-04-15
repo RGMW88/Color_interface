@@ -28,8 +28,15 @@ const CONFIG = {
   TURBULENCE: 0.22,
   COLOR_DIFFUSION: 0.44, // Adjust user color spreading here.
   COLOR_DECAY: 0.99988, // Adjust user color persistence here.
+  SATURATION_DECAY: 0.00008, // Adjust saturation decay here.
   COLOR_STRENGTH: 1.34, // Adjust user color strength here.
+  COLOR_BLEND_STRENGTH: 0.34, // Adjust color memory blending here.
   GROWTH_STRENGTH: 0.46, // Adjust multi-user growth / shaping here.
+  MAX_BRIGHTNESS: 0.86, // Adjust anti-whiteout brightness cap here.
+  MAX_GLOW: 0.72, // Adjust maximum glow opacity here.
+  WHITE_CLAMP: 232, // Adjust RGB channel cap to prevent whiteout here.
+  NEUTRAL_DRIFT: 0.00016, // Adjust drift toward neutral here.
+  HUE_MIX_WEIGHT: 0.58, // Adjust hue mixing toward neighbor color here.
   HALO_RADIUS: 12,
   CONNECTION_RENDER_STEP: 2,
   SPIN_MEMORY: 0.028, // Adjust rotational persistence here.
@@ -409,12 +416,15 @@ function stepField(elapsed) {
         0,
         4.5
       );
-      nextTintR[row][col] = mixValue(cell.tintR, neighborhood.tintR, CONFIG.COLOR_DIFFUSION);
-      nextTintG[row][col] = mixValue(cell.tintG, neighborhood.tintG, CONFIG.COLOR_DIFFUSION);
-      nextTintB[row][col] = mixValue(cell.tintB, neighborhood.tintB, CONFIG.COLOR_DIFFUSION);
-      nextTintR[row][col] = mixValue(nextTintR[row][col], neighborhood.tintR, CONFIG.TINT_MEMORY);
-      nextTintG[row][col] = mixValue(nextTintG[row][col], neighborhood.tintG, CONFIG.TINT_MEMORY);
-      nextTintB[row][col] = mixValue(nextTintB[row][col], neighborhood.tintB, CONFIG.TINT_MEMORY);
+      const neighborColorPresence = clamp(neighborhood.colorWeight / 2.4, 0, 1);
+      const tintMix = CONFIG.COLOR_BLEND_STRENGTH * neighborColorPresence;
+      const neutralDrift = Math.max(0, 1 - CONFIG.NEUTRAL_DRIFT * stepScale);
+      nextTintR[row][col] = mixValue(cell.tintR, neighborhood.tintR, tintMix * CONFIG.HUE_MIX_WEIGHT) * neutralDrift;
+      nextTintG[row][col] = mixValue(cell.tintG, neighborhood.tintG, tintMix * CONFIG.HUE_MIX_WEIGHT) * neutralDrift;
+      nextTintB[row][col] = mixValue(cell.tintB, neighborhood.tintB, tintMix * CONFIG.HUE_MIX_WEIGHT) * neutralDrift;
+      nextTintR[row][col] = mixValue(nextTintR[row][col], neighborhood.tintR, CONFIG.TINT_MEMORY * neighborColorPresence);
+      nextTintG[row][col] = mixValue(nextTintG[row][col], neighborhood.tintG, CONFIG.TINT_MEMORY * neighborColorPresence);
+      nextTintB[row][col] = mixValue(nextTintB[row][col], neighborhood.tintB, CONFIG.TINT_MEMORY * neighborColorPresence);
       nextStructuralMemory[row][col] = cell.hasStructuralMemory
         ? Math.max(
             CONFIG.STRUCTURAL_MEMORY_FLOOR,
@@ -585,7 +595,7 @@ function renderDirectionalStrokes() {
         : clamp(0.07 + cell.intensity * 0.18 + cell.memory * 0.06, 0.05, 0.26);
       const cellColor = getCellColor(cell);
       const haloAlpha = Math.min(
-        isColored ? 0.68 : 0.18,
+        isColored ? CONFIG.MAX_GLOW : 0.18,
         cell.intensity * 0.16 +
           cell.colorWeight * 0.14 +
           cell.memory * CONFIG.GLOW_PERSISTENCE * 0.1 +
@@ -803,7 +813,9 @@ function getDurationWeight(duration, type, phase) {
 }
 
 function getStructurallyBiasedColor(cell, color) {
-  if (!cell.hasStructuralMemory || cell.structuralMemory <= 0.02) {
+  const structuralHasColor = cell.structuralTintR + cell.structuralTintG + cell.structuralTintB > 8;
+
+  if (!cell.hasStructuralMemory || cell.structuralMemory <= 0.02 || !structuralHasColor) {
     return color;
   }
 
@@ -881,32 +893,29 @@ function getCellColor(cell) {
     return parseRgb(CONFIG.STROKE_COLOR);
   }
 
-  const saturationBoost = clamp(1.05 + cell.intensity * 0.24 + cell.colorWeight * 0.12, 1.05, 1.45);
   const weightedR = cell.colorWeight > 0.001 ? (cell.colorR / cell.colorWeight) * 255 : 0;
   const weightedG = cell.colorWeight > 0.001 ? (cell.colorG / cell.colorWeight) * 255 : 0;
   const weightedB = cell.colorWeight > 0.001 ? (cell.colorB / cell.colorWeight) * 255 : 0;
-  const sourceR = cell.tintR || weightedR || cell.structuralTintR || 0;
-  const sourceG = cell.tintG || weightedG || cell.structuralTintG || 0;
-  const sourceB = cell.tintB || weightedB || cell.structuralTintB || 0;
+  const fallbackColor = cell.lastInputColor || { r: 120, g: 170, b: 255 };
+  const sourceR = cell.tintR || weightedR || cell.structuralTintR || fallbackColor.r;
+  const sourceG = cell.tintG || weightedG || cell.structuralTintG || fallbackColor.g;
+  const sourceB = cell.tintB || weightedB || cell.structuralTintB || fallbackColor.b;
   const conflictMix = clamp(cell.instability * 0.75, 0, 0.65);
   const unstableR = mixValue(sourceR, cell.conflictTintR || sourceR, conflictMix);
   const unstableG = mixValue(sourceG, cell.conflictTintG || sourceG, conflictMix);
   const unstableB = mixValue(sourceB, cell.conflictTintB || sourceB, conflictMix);
-  const desaturation = clamp(1 - cell.instability * 0.45, 0.55, 1);
-  const unstableAverage = (unstableR + unstableG + unstableB) / 3;
   const neutral = parseRgb(CONFIG.STROKE_COLOR);
-  const blend = clamp(CONFIG.SATURATION_FLOOR + cell.colorWeight / 5, CONFIG.SATURATION_FLOOR, 1);
+  const chroma = preserveChroma(
+    { r: unstableR, g: unstableG, b: unstableB },
+    cell.colorWeight,
+    cell.instability
+  );
+  const blend = clamp(0.82 + cell.colorWeight / 6, 0.82, 1);
 
   return {
-    r: Math.round(
-      clamp(mixValue(neutral.r, mixValue(unstableAverage, unstableR, desaturation) * saturationBoost, blend), 0, 255)
-    ),
-    g: Math.round(
-      clamp(mixValue(neutral.g, mixValue(unstableAverage, unstableG, desaturation) * saturationBoost, blend), 0, 255)
-    ),
-    b: Math.round(
-      clamp(mixValue(neutral.b, mixValue(unstableAverage, unstableB, desaturation) * saturationBoost, blend), 0, 255)
-    )
+    r: Math.round(clamp(mixValue(neutral.r, chroma.r, blend), 0, CONFIG.WHITE_CLAMP)),
+    g: Math.round(clamp(mixValue(neutral.g, chroma.g, blend), 0, CONFIG.WHITE_CLAMP)),
+    b: Math.round(clamp(mixValue(neutral.b, chroma.b, blend), 0, CONFIG.WHITE_CLAMP))
   };
 }
 
@@ -931,6 +940,105 @@ function normalizeColorPayload(color) {
   }
 
   return null;
+}
+
+function preserveChroma(color, colorWeight, instability) {
+  const hsv = rgbToHsv(color.r, color.g, color.b);
+  const saturationFloor = clamp(CONFIG.SATURATION_FLOOR - instability * 0.18, 0.68, 0.98);
+  const saturation = clamp(
+    Math.max(hsv.s, saturationFloor) * (1 - CONFIG.SATURATION_DECAY * Math.max(0, 1 - colorWeight)),
+    0,
+    1
+  );
+  const value = clamp(
+    Math.min(hsv.v, CONFIG.MAX_BRIGHTNESS) + Math.min(0.08, colorWeight * 0.012),
+    0,
+    CONFIG.MAX_BRIGHTNESS
+  );
+
+  return hsvToRgb(hsv.h, saturation, value);
+}
+
+function rgbToHsv(r, g, b) {
+  const red = clamp(r / 255, 0, 1);
+  const green = clamp(g / 255, 0, 1);
+  const blue = clamp(b / 255, 0, 1);
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  let h = 0;
+
+  if (delta !== 0) {
+    if (max === red) {
+      h = ((green - blue) / delta) % 6;
+    } else if (max === green) {
+      h = (blue - red) / delta + 2;
+    } else {
+      h = (red - green) / delta + 4;
+    }
+
+    h /= 6;
+
+    if (h < 0) {
+      h += 1;
+    }
+  }
+
+  return {
+    h,
+    s: max === 0 ? 0 : delta / max,
+    v: max
+  };
+}
+
+function hsvToRgb(h, s, v) {
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  switch (i % 6) {
+    case 0:
+      r = v;
+      g = t;
+      b = p;
+      break;
+    case 1:
+      r = q;
+      g = v;
+      b = p;
+      break;
+    case 2:
+      r = p;
+      g = v;
+      b = t;
+      break;
+    case 3:
+      r = p;
+      g = q;
+      b = v;
+      break;
+    case 4:
+      r = t;
+      g = p;
+      b = v;
+      break;
+    default:
+      r = v;
+      g = p;
+      b = q;
+      break;
+  }
+
+  return {
+    r: Math.round(r * 255),
+    g: Math.round(g * 255),
+    b: Math.round(b * 255)
+  };
 }
 
 function blendColors(a, b, amount) {
