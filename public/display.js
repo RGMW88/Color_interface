@@ -2,6 +2,8 @@ const socket = io();
 const canvas = document.getElementById("field-canvas");
 const ctx = canvas.getContext("2d");
 const resetButton = document.getElementById("reset-field");
+const toggleQrButton = document.getElementById("toggle-qr");
+const qrPanel = document.getElementById("qr-panel");
 const qrImage = document.getElementById("qr-image");
 const controllerLink = document.getElementById("controller-link");
 
@@ -37,6 +39,13 @@ const CONFIG = {
   WHITE_CLAMP: 232, // Adjust RGB channel cap to prevent whiteout here.
   NEUTRAL_DRIFT: 0.00016, // Adjust drift toward neutral here.
   HUE_MIX_WEIGHT: 0.58, // Adjust hue mixing toward neighbor color here.
+  MIN_SATURATION: 0.62, // Adjust minimum saturation here.
+  MAX_LIGHTNESS: 0.76, // Adjust max color brightness/value here.
+  HUE_BLEND_RATE: 0.42, // Adjust circular hue blending here.
+  COLOR_MEMORY_DECAY: 0.9997, // Adjust chromatic memory decay here.
+  COLOR_ENERGY_DECAY: 0.997, // Adjust color energy decay here.
+  BASE_COLOR_VALUE: 0.42, // Adjust baseline color value here.
+  ENERGY_VALUE_GAIN: 0.2, // Adjust how much energy lifts value without whitening.
   HALO_RADIUS: 12,
   CONNECTION_RENDER_STEP: 2,
   SPIN_MEMORY: 0.028, // Adjust rotational persistence here.
@@ -74,6 +83,12 @@ window.addEventListener("resize", handleResize);
 resetButton.addEventListener("click", () => {
   socket.emit("field:reset");
   clearField();
+});
+
+toggleQrButton.addEventListener("click", () => {
+  const isHidden = qrPanel.classList.toggle("hidden");
+  toggleQrButton.setAttribute("aria-pressed", String(!isHidden));
+  toggleQrButton.textContent = isHidden ? "Show QR" : "QR";
 });
 
 socket.on("field:disturbance", (payload) => {
@@ -142,6 +157,10 @@ function createField() {
         tintR: 0,
         tintG: 0,
         tintB: 0,
+        hueMemory: 0,
+        saturationMemory: CONFIG.MIN_SATURATION,
+        colorEnergy: 0,
+        hasColorMemory: false,
         structuralTintR: 0,
         structuralTintG: 0,
         structuralTintB: 0,
@@ -185,6 +204,10 @@ function clearField() {
       cell.tintR = 0;
       cell.tintG = 0;
       cell.tintB = 0;
+      cell.hueMemory = 0;
+      cell.saturationMemory = CONFIG.MIN_SATURATION;
+      cell.colorEnergy = 0;
+      cell.hasColorMemory = false;
       cell.structuralTintR = 0;
       cell.structuralTintG = 0;
       cell.structuralTintB = 0;
@@ -281,10 +304,24 @@ function injectDisturbance(payload) {
   if (userColor) {
     const colorApplied = applied * CONFIG.COLOR_STRENGTH * 1.25;
     const biasedColor = getStructurallyBiasedColor(cell, userColor);
+    const hsv = rgbToHsv(biasedColor.r, biasedColor.g, biasedColor.b);
+    const hueBlendAmount = cell.hasColorMemory
+      ? clamp(CONFIG.HUE_BLEND_RATE * (0.35 + force), 0.08, 0.7)
+      : 1;
     cell.colorR += userColor.r01 * colorApplied;
     cell.colorG += userColor.g01 * colorApplied;
     cell.colorB += userColor.b01 * colorApplied;
     cell.colorWeight = Math.min(5, cell.colorWeight + 1 + force * 0.6);
+    cell.hueMemory = cell.hasColorMemory
+      ? blendHue(cell.hueMemory, hsv.h, hueBlendAmount)
+      : hsv.h;
+    cell.saturationMemory = clamp(
+      Math.max(cell.saturationMemory, hsv.s, CONFIG.MIN_SATURATION),
+      CONFIG.MIN_SATURATION,
+      1
+    );
+    cell.colorEnergy = Math.min(1.8, cell.colorEnergy + applied * 0.28 + force * 0.18);
+    cell.hasColorMemory = true;
     cell.tintR = cell.tintR > 0 ? mixValue(cell.tintR, biasedColor.r, 0.45) : biasedColor.r;
     cell.tintG = cell.tintG > 0 ? mixValue(cell.tintG, biasedColor.g, 0.45) : biasedColor.g;
     cell.tintB = cell.tintB > 0 ? mixValue(cell.tintB, biasedColor.b, 0.45) : biasedColor.b;
@@ -342,6 +379,10 @@ function stepField(elapsed) {
   const nextTintR = create2DArray(cols, rows);
   const nextTintG = create2DArray(cols, rows);
   const nextTintB = create2DArray(cols, rows);
+  const nextHueMemory = create2DArray(cols, rows);
+  const nextSaturationMemory = create2DArray(cols, rows);
+  const nextColorEnergy = create2DArray(cols, rows);
+  const nextHasColorMemory = create2DArray(cols, rows);
   const nextStructuralMemory = create2DArray(cols, rows);
   const nextStructuralFlowX = create2DArray(cols, rows);
   const nextStructuralFlowY = create2DArray(cols, rows);
@@ -425,6 +466,29 @@ function stepField(elapsed) {
       nextTintR[row][col] = mixValue(nextTintR[row][col], neighborhood.tintR, CONFIG.TINT_MEMORY * neighborColorPresence);
       nextTintG[row][col] = mixValue(nextTintG[row][col], neighborhood.tintG, CONFIG.TINT_MEMORY * neighborColorPresence);
       nextTintB[row][col] = mixValue(nextTintB[row][col], neighborhood.tintB, CONFIG.TINT_MEMORY * neighborColorPresence);
+      nextHasColorMemory[row][col] = cell.hasColorMemory || neighborhood.hasColorMemory;
+      nextHueMemory[row][col] =
+        !cell.hasColorMemory && neighborhood.hasColorMemory
+          ? neighborhood.hueMemory
+          : cell.hasColorMemory && neighborhood.hasColorMemory
+          ? blendHue(cell.hueMemory, neighborhood.hueMemory, CONFIG.HUE_BLEND_RATE * neighborColorPresence)
+          : cell.hueMemory;
+      nextSaturationMemory[row][col] = clamp(
+        Math.max(
+          CONFIG.MIN_SATURATION,
+          mixValue(cell.saturationMemory, neighborhood.saturationMemory, CONFIG.COLOR_BLEND_STRENGTH * neighborColorPresence) -
+            CONFIG.SATURATION_DECAY * stepScale
+        ),
+        CONFIG.MIN_SATURATION,
+        1
+      );
+      nextColorEnergy[row][col] = clamp(
+        mixValue(cell.colorEnergy, neighborhood.colorEnergy, CONFIG.COLOR_DIFFUSION * neighborColorPresence) *
+          CONFIG.COLOR_ENERGY_DECAY *
+          CONFIG.COLOR_MEMORY_DECAY,
+        0,
+        1.8
+      );
       nextStructuralMemory[row][col] = cell.hasStructuralMemory
         ? Math.max(
             CONFIG.STRUCTURAL_MEMORY_FLOOR,
@@ -464,6 +528,10 @@ function stepField(elapsed) {
       cell.tintR = nextTintR[row][col];
       cell.tintG = nextTintG[row][col];
       cell.tintB = nextTintB[row][col];
+      cell.hueMemory = nextHueMemory[row][col];
+      cell.saturationMemory = nextSaturationMemory[row][col];
+      cell.colorEnergy = nextColorEnergy[row][col];
+      cell.hasColorMemory = nextHasColorMemory[row][col];
       cell.structuralMemory = nextStructuralMemory[row][col];
       cell.hasStructuralMemory = cell.hasStructuralMemory || cell.structuralMemory > 0;
       cell.structuralFlowX = nextStructuralFlowX[row][col];
@@ -675,6 +743,11 @@ function getNeighborField(col, row) {
   let tintR = 0;
   let tintG = 0;
   let tintB = 0;
+  let hueX = 0;
+  let hueY = 0;
+  let saturationMemory = 0;
+  let colorEnergy = 0;
+  let colorMemoryCount = 0;
   let structuralMemory = 0;
   let structuralFlowX = 0;
   let structuralFlowY = 0;
@@ -706,6 +779,13 @@ function getNeighborField(col, row) {
       tintR += neighbor.tintR;
       tintG += neighbor.tintG;
       tintB += neighbor.tintB;
+      if (neighbor.hasColorMemory) {
+        hueX += Math.cos(neighbor.hueMemory * Math.PI * 2) * Math.max(0.001, neighbor.colorEnergy);
+        hueY += Math.sin(neighbor.hueMemory * Math.PI * 2) * Math.max(0.001, neighbor.colorEnergy);
+        saturationMemory += neighbor.saturationMemory;
+        colorEnergy += neighbor.colorEnergy;
+        colorMemoryCount += 1;
+      }
       structuralMemory += neighbor.structuralMemory;
       structuralFlowX += neighbor.structuralFlowX;
       structuralFlowY += neighbor.structuralFlowY;
@@ -734,6 +814,10 @@ function getNeighborField(col, row) {
       tintR: 0,
       tintG: 0,
       tintB: 0,
+      hueMemory: 0,
+      saturationMemory: CONFIG.MIN_SATURATION,
+      colorEnergy: 0,
+      hasColorMemory: false,
       structuralMemory: 0,
       structuralFlowX: 0,
       structuralFlowY: 0,
@@ -748,6 +832,8 @@ function getNeighborField(col, row) {
   }
 
   const averageFlow = normalizeVector(sumX / count, sumY / count, 1);
+  const hasColorMemory = colorMemoryCount > 0;
+  const hueMemory = hasColorMemory ? normalizeHue(Math.atan2(hueY, hueX) / (Math.PI * 2)) : 0;
 
   return {
     flowX: averageFlow.x,
@@ -762,6 +848,10 @@ function getNeighborField(col, row) {
     tintR: tintR / count,
     tintG: tintG / count,
     tintB: tintB / count,
+    hueMemory,
+    saturationMemory: hasColorMemory ? saturationMemory / colorMemoryCount : CONFIG.MIN_SATURATION,
+    colorEnergy: hasColorMemory ? colorEnergy / colorMemoryCount : 0,
+    hasColorMemory,
     structuralMemory: structuralMemory / count,
     structuralFlowX: structuralFlowX / count,
     structuralFlowY: structuralFlowY / count,
@@ -879,6 +969,30 @@ function clamp(value, min = 0, max = 1) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizeHue(value) {
+  let hue = value % 1;
+
+  if (hue < 0) {
+    hue += 1;
+  }
+
+  return hue;
+}
+
+function blendHue(current, target, amount) {
+  const from = normalizeHue(current);
+  const to = normalizeHue(target);
+  let delta = to - from;
+
+  if (delta > 0.5) {
+    delta -= 1;
+  } else if (delta < -0.5) {
+    delta += 1;
+  }
+
+  return normalizeHue(from + delta * amount);
+}
+
 function getUserId(pointerId) {
   return String(pointerId || "controller").split(":")[0];
 }
@@ -889,21 +1003,28 @@ function getUserColor(userId) {
 }
 
 function getCellColor(cell) {
-  if (cell.colorWeight < 0.02) {
+  if (!cell.hasColorMemory && cell.colorWeight < 0.02) {
     return parseRgb(CONFIG.STROKE_COLOR);
   }
 
-  const weightedR = cell.colorWeight > 0.001 ? (cell.colorR / cell.colorWeight) * 255 : 0;
-  const weightedG = cell.colorWeight > 0.001 ? (cell.colorG / cell.colorWeight) * 255 : 0;
-  const weightedB = cell.colorWeight > 0.001 ? (cell.colorB / cell.colorWeight) * 255 : 0;
-  const fallbackColor = cell.lastInputColor || { r: 120, g: 170, b: 255 };
-  const sourceR = cell.tintR || weightedR || cell.structuralTintR || fallbackColor.r;
-  const sourceG = cell.tintG || weightedG || cell.structuralTintG || fallbackColor.g;
-  const sourceB = cell.tintB || weightedB || cell.structuralTintB || fallbackColor.b;
+  const fallbackColor = normalizeColorPayload(cell.lastInputColor) || { r: 120, g: 170, b: 255 };
+  const fallbackHsv = rgbToHsv(fallbackColor.r, fallbackColor.g, fallbackColor.b);
+  const hue = cell.hasColorMemory ? cell.hueMemory : fallbackHsv.h;
+  const saturation = clamp(
+    Math.max(cell.saturationMemory, CONFIG.MIN_SATURATION) - cell.instability * 0.12,
+    CONFIG.MIN_SATURATION,
+    1
+  );
+  const value = clamp(
+    CONFIG.BASE_COLOR_VALUE + cell.colorEnergy * CONFIG.ENERGY_VALUE_GAIN,
+    CONFIG.BASE_COLOR_VALUE,
+    CONFIG.MAX_LIGHTNESS
+  );
+  const source = hsvToRgb(hue, saturation, value);
   const conflictMix = clamp(cell.instability * 0.75, 0, 0.65);
-  const unstableR = mixValue(sourceR, cell.conflictTintR || sourceR, conflictMix);
-  const unstableG = mixValue(sourceG, cell.conflictTintG || sourceG, conflictMix);
-  const unstableB = mixValue(sourceB, cell.conflictTintB || sourceB, conflictMix);
+  const unstableR = mixValue(source.r, cell.conflictTintR || source.r, conflictMix);
+  const unstableG = mixValue(source.g, cell.conflictTintG || source.g, conflictMix);
+  const unstableB = mixValue(source.b, cell.conflictTintB || source.b, conflictMix);
   const neutral = parseRgb(CONFIG.STROKE_COLOR);
   const chroma = preserveChroma(
     { r: unstableR, g: unstableG, b: unstableB },
@@ -944,16 +1065,16 @@ function normalizeColorPayload(color) {
 
 function preserveChroma(color, colorWeight, instability) {
   const hsv = rgbToHsv(color.r, color.g, color.b);
-  const saturationFloor = clamp(CONFIG.SATURATION_FLOOR - instability * 0.18, 0.68, 0.98);
+  const saturationFloor = clamp(CONFIG.MIN_SATURATION - instability * 0.08, 0.5, 0.98);
   const saturation = clamp(
     Math.max(hsv.s, saturationFloor) * (1 - CONFIG.SATURATION_DECAY * Math.max(0, 1 - colorWeight)),
     0,
     1
   );
   const value = clamp(
-    Math.min(hsv.v, CONFIG.MAX_BRIGHTNESS) + Math.min(0.08, colorWeight * 0.012),
+    Math.min(hsv.v, CONFIG.MAX_LIGHTNESS) + Math.min(0.04, colorWeight * 0.006),
     0,
-    CONFIG.MAX_BRIGHTNESS
+    CONFIG.MAX_LIGHTNESS
   );
 
   return hsvToRgb(hsv.h, saturation, value);

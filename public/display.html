@@ -11,10 +11,11 @@
 
     <div class="display-shell">
       <div class="display-meta">
+        <button id="toggle-qr" class="ghost-button" type="button" aria-pressed="true">QR</button>
         <button id="reset-field" class="ghost-button" type="button">Reset</button>
       </div>
 
-      <aside class="qr-panel">
+      <aside id="qr-panel" class="qr-panel">
         <p>Scan to enter the field</p>
         <img id="qr-image" alt="QR code linking to the controller page" />
         <a id="controller-link" href="/controller">/controller</a>
