@@ -40,7 +40,7 @@ const CONFIG = {
   NEUTRAL_DRIFT: 0.00016, // Adjust drift toward neutral here.
   HUE_MIX_WEIGHT: 0.58, // Adjust hue mixing toward neighbor color here.
   BASE_POINT_SIZE: 1, // Adjust default point size here.
-  MIN_POINT_SIZE_RATIO: 0.08, // Adjust smallest inactive point size here.
+  MIN_POINT_SIZE_RATIO: 0.015, // Adjust smallest inactive point size here.
   INACTIVITY_THRESHOLD: 10000, // Adjust time before points begin shrinking here, in ms.
   SIZE_SHRINK_RATE: 0.055, // Adjust slow inactive shrink speed here.
   SIZE_GROW_RATE: 0.035, // Adjust reactivation growth speed here.
@@ -300,6 +300,8 @@ function injectDisturbance(payload) {
   const memoryGain = interactionType === "hold" ? 1.35 : 0.42;
   const structuralGain = interactionType === "hold" ? 0.026 : 0.004;
 
+  cell.inactiveTime = 0;
+  cell.targetSize = CONFIG.BASE_POINT_SIZE;
   cell.flowX += directionX * applied * 0.45;
   cell.flowY += directionY * applied * 0.45;
   cell.intensity = Math.min(3, cell.intensity + applied * 0.92);
@@ -663,7 +665,14 @@ function renderDirectionalStrokes() {
       const jitteredFlowX = cell.flowX * cosJitter - cell.flowY * sinJitter;
       const jitteredFlowY = cell.flowX * sinJitter + cell.flowY * cosJitter;
       const dir = normalizeVector(jitteredFlowX, jitteredFlowY, 1);
-      const length = CONFIG.LINE_LENGTH + cell.intensity * 8 + cell.memory * 4;
+      const footprintScale = clamp(
+        cell.currentSize / CONFIG.BASE_POINT_SIZE,
+        CONFIG.MIN_POINT_SIZE_RATIO,
+        1
+      );
+      const length =
+        (CONFIG.LINE_LENGTH + cell.intensity * 8 + cell.memory * 4) *
+        clamp(0.22 + footprintScale * 0.78, 0.22, 1);
       const half = length * 0.5;
       const x1 = cell.x - dir.x * half;
       const y1 = cell.y - dir.y * half;
@@ -682,28 +691,30 @@ function renderDirectionalStrokes() {
           cell.memory * CONFIG.GLOW_PERSISTENCE * 0.1 +
           cell.instability * 0.16
       );
+      const visibleHaloAlpha = haloAlpha * clamp(0.08 + footprintScale * 0.92, 0.08, 1);
+      const visibleHaloRadius = Math.max(
+        0.25,
+        (CONFIG.HALO_RADIUS + cell.intensity * 5 + cell.colorWeight * 2.6) * footprintScale
+      );
 
-      ctx.shadowBlur = isColored
-        ? CONFIG.GLOW_AMOUNT + cell.intensity * 10 + cell.colorWeight * 4
-        : CONFIG.GLOW_AMOUNT * 0.35;
+      ctx.shadowBlur =
+        (isColored
+          ? CONFIG.GLOW_AMOUNT + cell.intensity * 10 + cell.colorWeight * 4
+          : CONFIG.GLOW_AMOUNT * 0.35) * clamp(0.1 + footprintScale * 0.9, 0.1, 1);
       ctx.shadowColor = `rgba(${cellColor.r}, ${cellColor.g}, ${cellColor.b}, ${
         (isColored ? 0.28 + cell.intensity * 0.26 + cell.instability * 0.22 : 0.06).toFixed(3)
       })`;
 
-      if (haloAlpha > 0.02) {
-        ctx.fillStyle = `rgba(${cellColor.r}, ${cellColor.g}, ${cellColor.b}, ${haloAlpha.toFixed(3)})`;
+      if (visibleHaloAlpha > 0.02) {
+        ctx.fillStyle = `rgba(${cellColor.r}, ${cellColor.g}, ${cellColor.b}, ${visibleHaloAlpha.toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(
-          cell.x,
-          cell.y,
-          CONFIG.HALO_RADIUS + cell.intensity * 5 + cell.colorWeight * 2.6,
-          0,
-          Math.PI * 2
-        );
+        ctx.arc(cell.x, cell.y, visibleHaloRadius, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      ctx.lineWidth = CONFIG.LINE_THICKNESS + cell.intensity * 0.9;
+      ctx.lineWidth =
+        (CONFIG.LINE_THICKNESS + cell.intensity * 0.9) *
+        clamp(0.35 + footprintScale * 0.65, 0.35, 1);
       ctx.strokeStyle = `rgba(${cellColor.r}, ${cellColor.g}, ${cellColor.b}, ${alpha.toFixed(3)})`;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
@@ -715,7 +726,13 @@ function renderDirectionalStrokes() {
         (isColored ? 0.34 + cell.intensity * 0.16 : 0.08).toFixed(3)
       })`;
       ctx.beginPath();
-      ctx.arc(cell.x, cell.y, cell.currentSize + cell.intensity * 1.3, 0, Math.PI * 2);
+      ctx.arc(
+        cell.x,
+        cell.y,
+        Math.max(0.12, (CONFIG.BASE_POINT_SIZE + cell.intensity * 1.3) * footprintScale),
+        0,
+        Math.PI * 2
+      );
       ctx.fill();
     }
   }
@@ -885,11 +902,7 @@ function getClosestCell(px, py) {
 }
 
 function updatePointSize(cell, elapsed) {
-  const sustainedActivity =
-    cell.intensity +
-    cell.activeMemory +
-    cell.colorWeight * 0.35 +
-    cell.instability * 0.6;
+  const sustainedActivity = cell.activeMemory + cell.instability * 0.6;
   const minimumSize = CONFIG.BASE_POINT_SIZE * CONFIG.MIN_POINT_SIZE_RATIO;
 
   if (sustainedActivity > 0.18) {
