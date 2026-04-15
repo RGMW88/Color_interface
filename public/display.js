@@ -40,7 +40,7 @@ const CONFIG = {
   NEUTRAL_DRIFT: 0.00016, // Adjust drift toward neutral here.
   HUE_MIX_WEIGHT: 0.58, // Adjust hue mixing toward neighbor color here.
   BASE_POINT_SIZE: 1, // Adjust default point size here.
-  MIN_POINT_SIZE_RATIO: 0.25, // Adjust smallest inactive point size here.
+  MIN_POINT_SIZE_RATIO: 0.08, // Adjust smallest inactive point size here.
   INACTIVITY_THRESHOLD: 10000, // Adjust time before points begin shrinking here, in ms.
   SIZE_SHRINK_RATE: 0.055, // Adjust slow inactive shrink speed here.
   SIZE_GROW_RATE: 0.035, // Adjust reactivation growth speed here.
